@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,8 +17,6 @@ import (
 )
 
 var port int
-var secondsToKill int
-var msToStart int
 var rawurl string
 var proxyUrl *url.URL
 
@@ -28,11 +25,9 @@ func init() {
 	flag.IntVar(&port, "port", 8009, "The port for shotgun to listen on")
 	flag.StringVar(&rawurl, "u", "", "Shorthand for --url")
 	flag.StringVar(&rawurl, "url", "", "The url to proxy for")
-	flag.IntVar(&secondsToKill, "t", 1, "Shorthand for --timeout")
-	flag.IntVar(&secondsToKill, "timeout", 1, "How long (seconds) to wait before sending SIGKILL to old process")
-	flag.IntVar(&msToStart, "s", 100, "Shorthand for --start")
-	flag.IntVar(&msToStart, "start", 100, "How long (milliseconds) to wait before forwarding request to new process")
 	flag.Parse()
+
+	// This is crap. Replace it with an unbuffered channel.
 	runtime.GOMAXPROCS(1) // We need to wait for the subcommand to exit before starting the next iteration.
 
 	var err error
@@ -47,11 +42,14 @@ func init() {
 	}
 }
 
-func startProcess(c *exec.Cmd) (*bytes.Buffer, error) {
-	b := bytes.NewBuffer(make([]byte, 1024024))
-	c.Stderr = b
-	c.Stdout = b
-	return b, c.Start()
+func startProcess(c *exec.Cmd) chan *[]byte {
+	var sem = make(chan *[]byte)
+
+	go func() {
+		out, _ := c.CombinedOutput()
+		sem <- &out
+	}()
+	return sem
 }
 
 func waitUntilUp(c *exec.Cmd) error {
@@ -62,22 +60,45 @@ func waitUntilUp(c *exec.Cmd) error {
 	wg.Add(1)
 	ticker := time.NewTicker(time.Millisecond * 50)
 
+	once := sync.Once{}
+	finished := func() {
+		once.Do(func() {
+			ticker.Stop()
+			wg.Done()
+		})
+	}
+
 	go func() {
+		go func() {
+			time.Sleep(time.Millisecond)
+			if c.Process == nil {
+				fmt.Println("Process not started")
+				return
+			}
+			c.Process.Wait()
+			finished()
+			err = errors.New("Process exited")
+			return
+		}()
+
 		for _ = range ticker.C {
+			if c.ProcessState != nil && c.ProcessState.Exited() {
+				err = errors.New("Process quit.")
+			}
 			_, err = http.Head(proxyUrl.String())
 
 			if err == nil {
-				ticker.Stop()
-				wg.Done()
+				// We're up!
+				finished()
 				return
 			}
 
 			fmt.Print(".")
 			ticks = ticks + 1
 			if ticks > 50 {
+				fmt.Print("Giving up")
 				err = errors.New(fmt.Sprintf("Process did not listen after waiting ages\n%s", err))
-				ticker.Stop()
-				wg.Done()
+				finished()
 				return
 			}
 		}
@@ -87,7 +108,7 @@ func waitUntilUp(c *exec.Cmd) error {
 	return err
 }
 
-func waitUntilDown() error {
+func waitUntilDown(c *exec.Cmd) error {
 	var wg sync.WaitGroup
 	var ticks int
 	var resultErr error
@@ -107,7 +128,7 @@ func waitUntilDown() error {
 
 			ticks = ticks + 1
 			if ticks > 50 {
-				resultErr = errors.New(fmt.Sprintf("Process did not die after waiting"))
+				resultErr = errors.New(fmt.Sprintf("Process %s did not die after waiting", c.Process.Pid))
 				ticker.Stop()
 				wg.Done()
 				return
@@ -124,7 +145,7 @@ func killProcess(c *exec.Cmd) {
 		c.Process.Signal(syscall.SIGTERM)
 		c.Process.Release()
 	}
-	err := waitUntilDown()
+	err := waitUntilDown(c)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -149,15 +170,21 @@ func main() {
 		command = exec.Command("/tmp/shotgunner")
 
 		defer killProcess(command)
-		out, err := startProcess(command)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
+		out := startProcess(command)
+
+		pid := -1
+		if command.Process != nil {
+			pid = command.Process.Pid
 		}
+		if command.ProcessState != nil {
+			pid = command.ProcessState.Pid()
+		}
+		fmt.Println(pid)
+
 		if err := waitUntilUp(command); err != nil {
-			fmt.Println(out.String())
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			fmt.Fprint(rw, out.String())
+			http.Error(rw, "Error starting server.", http.StatusInternalServerError)
+			output := <-out
+			fmt.Fprint(rw, string(*output))
 			return
 		}
 		proxy.ServeHTTP(rw, r)
