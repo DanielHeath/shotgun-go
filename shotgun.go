@@ -47,6 +47,8 @@ func startProcess(c *exec.Cmd) chan *[]byte {
 
 	go func() {
 		out, _ := c.CombinedOutput()
+		fmt.Println("******************* subprocess output **************")
+		fmt.Print(string(out))
 		sem <- &out
 	}()
 	return sem
