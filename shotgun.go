@@ -97,9 +97,9 @@ func waitUntilUp(c *exec.Cmd) error {
 
 			fmt.Print(".")
 			ticks = ticks + 1
-			if ticks > 50 {
+			if ticks > 70 {
 				fmt.Print("Giving up")
-				err = errors.New(fmt.Sprintf("Process did not listen after waiting ages\n%s", err))
+				err = errors.New(fmt.Sprintf("Process did not listen after waiting 70*50ms\n%s", err))
 				finished()
 				return
 			}
