@@ -160,15 +160,20 @@ func main() {
 
 	http.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
 		var command *exec.Cmd
-		var err error
 
-		os.Remove("/tmp/shotgunner")
-		buildout, err := exec.Command("go", "build", "-o", "/tmp/shotgunner", args[0]).CombinedOutput()
-		if err != nil {
-			http.Error(rw, err.Error()+string(buildout), http.StatusInternalServerError)
-			return
+		uptodate := exec.Command(
+			"bash",
+			"-c",
+			"[ ! -e /tmp/shotgunner ] || find src -newer /tmp/shotgunner | grep .",
+		)
+		uptodate.CombinedOutput() // Block until finished
+		if uptodate.ProcessState.Success() {
+			buildout, err := exec.Command("go", "build", "-o", "/tmp/shotgunner", args[0]).CombinedOutput()
+			if err != nil {
+				http.Error(rw, err.Error()+string(buildout), http.StatusInternalServerError)
+				return
+			}
 		}
-
 		command = exec.Command("/tmp/shotgunner")
 
 		defer killProcess(command)
