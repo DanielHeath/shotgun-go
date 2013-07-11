@@ -23,18 +23,23 @@ type WebProcess struct {
 	TargetUrl *url.URL
 	command   *exec.Cmd
 	output    bytes.Buffer
+	stdout    io.Writer
+	stderr    io.Writer
 	m         sync.Mutex
 	Log       *logger.Logger
 }
 
 func NewWebProcess(checkCmd, buildCmd, runCmd string, targeturl *url.URL, log *logger.Logger) *WebProcess {
-	return &WebProcess{
+	wp := &WebProcess{
 		CheckCmd:  checkCmd,
 		BuildCmd:  buildCmd,
 		RunCmd:    runCmd,
 		TargetUrl: targeturl,
 		Log:       log,
 	}
+	wp.clearCmd()
+
+	return wp
 }
 
 type responseWrapper struct {
@@ -48,6 +53,7 @@ func (r responseWrapper) WriteHeader(code int) {
 		io.Copy(r.ResponseWriter, &r.WebProcess.output)
 	}
 }
+
 func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.m.Lock()
 	defer w.m.Unlock()
@@ -67,10 +73,9 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 func (w *WebProcess) reload() (err error) {
 	w.Log.Println("Reloading...")
 	w.stop()
-	buildout, err := w.rebuild()
+	err = w.rebuild()
 	if err != nil {
 		w.Log.Println(err)
-		w.Log.Println(buildout)
 		return
 	}
 	err = w.start()
@@ -91,14 +96,21 @@ func (w *WebProcess) stop() {
 		w.clearCmd()
 	}
 }
+
 func (w *WebProcess) clearCmd() {
 	w.command = nil
 	w.output = bytes.Buffer{}
+	w.stdout = io.MultiWriter(&w.output, os.Stdout)
+	w.stderr = io.MultiWriter(&w.output, os.Stderr)
 }
 
-func (w *WebProcess) rebuild() ([]byte, error) {
+func (w *WebProcess) rebuild() error {
 	w.Log.Println("Build: " + w.BuildCmd)
-	return exec.Command("bash", "-c", w.BuildCmd).CombinedOutput()
+	buildCmd := exec.Command("bash", "-c", w.BuildCmd)
+	buildCmd.Stdout = w.stdout
+	buildCmd.Stderr = w.stderr
+
+	return buildCmd.Run()
 }
 
 func (w *WebProcess) start() error {
@@ -108,8 +120,8 @@ func (w *WebProcess) start() error {
 	}
 
 	w.command = exec.Command("bash", "-c", w.RunCmd)
-	w.command.Stdout = io.MultiWriter(&w.output, os.Stdout)
-	w.command.Stderr = io.MultiWriter(&w.output, os.Stderr)
+	w.command.Stdout = w.stdout
+	w.command.Stderr = w.stderr
 
 	return w.command.Start()
 }
