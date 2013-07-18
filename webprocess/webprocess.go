@@ -3,12 +3,13 @@ package webprocess
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
+	logger "log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -16,12 +17,31 @@ import (
 )
 
 type WebProcess struct {
-	PackageName string
-	TargetUrl   *url.URL
-	command     *exec.Cmd
-	output      bytes.Buffer
-	m           sync.Mutex
+	CheckCmd  string
+	BuildCmd  string
+	RunCmd    string
+	TargetUrl *url.URL
+	command   *exec.Cmd
+	output    bytes.Buffer
+	stdout    io.Writer
+	stderr    io.Writer
+	m         sync.Mutex
+	Log       *logger.Logger
 }
+
+func NewWebProcess(checkCmd, buildCmd, runCmd string, targeturl *url.URL, log *logger.Logger) *WebProcess {
+	wp := &WebProcess{
+		CheckCmd:  checkCmd,
+		BuildCmd:  buildCmd,
+		RunCmd:    runCmd,
+		TargetUrl: targeturl,
+		Log:       log,
+	}
+	wp.clearCmd()
+
+	return wp
+}
+
 type responseWrapper struct {
 	http.ResponseWriter
 	*WebProcess
@@ -33,6 +53,7 @@ func (r responseWrapper) WriteHeader(code int) {
 		io.Copy(r.ResponseWriter, &r.WebProcess.output)
 	}
 }
+
 func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.m.Lock()
 	defer w.m.Unlock()
@@ -40,15 +61,9 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	if w.rebuildRequired() || (w.command == nil) {
 		err := w.reload()
 		if err != nil {
-			bytes, readErr := ioutil.ReadAll(&w.output)
-			out := string(bytes)
-			if readErr != nil {
-				out = out + "\nFailed to read webprocess stdout: " + readErr.Error()
-			}
-			fmt.Println(w.running())
-			fmt.Println(w.command)
-			http.Error(rw, err.Error()+"\nBEGIN Webprocess stdout:\n"+out+"\nEND stdout", http.StatusInternalServerError)
-			//return
+			bytes, _ := ioutil.ReadAll(&w.output)
+			output := string(bytes)
+			http.Error(rw, err.Error()+"\n\n"+output, http.StatusInternalServerError)
 		}
 	}
 	proxy := httputil.NewSingleHostReverseProxy(w.TargetUrl)
@@ -56,13 +71,16 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (w *WebProcess) reload() (err error) {
+	w.Log.Println("Reloading...")
 	w.stop()
 	err = w.rebuild()
 	if err != nil {
+		w.Log.Println(err)
 		return
 	}
 	err = w.start()
 	if err != nil {
+		w.Log.Println(err)
 		return
 	}
 	err = w.waitUntilUp()
@@ -78,26 +96,33 @@ func (w *WebProcess) stop() {
 		w.clearCmd()
 	}
 }
+
 func (w *WebProcess) clearCmd() {
 	w.command = nil
 	w.output = bytes.Buffer{}
+	w.stdout = io.MultiWriter(&w.output, os.Stdout)
+	w.stderr = io.MultiWriter(&w.output, os.Stderr)
 }
 
 func (w *WebProcess) rebuild() error {
-	buildout, err := exec.Command("go", "build", "-o", "/tmp/shotgunner", w.PackageName).CombinedOutput()
-	if err != nil {
-		return errors.New(err.Error() + string(buildout))
-	}
-	return nil
+	w.Log.Println("Build: " + w.BuildCmd)
+	buildCmd := exec.Command("bash", "-c", w.BuildCmd)
+	buildCmd.Stdout = w.stdout
+	buildCmd.Stderr = w.stderr
+
+	return buildCmd.Run()
 }
 
 func (w *WebProcess) start() error {
+	w.Log.Println("Start: " + w.RunCmd)
 	if w.running() {
 		return errors.New("Can't start, already running.")
 	}
-	w.command = exec.Command("/tmp/shotgunner")
-	w.command.Stdout = &w.output
-	w.command.Stderr = &w.output
+
+	w.command = exec.Command("bash", "-c", w.RunCmd)
+	w.command.Stdout = w.stdout
+	w.command.Stderr = w.stderr
+
 	return w.command.Start()
 }
 
@@ -120,7 +145,8 @@ func (w *WebProcess) waitUntilUp() error {
 	if w.up() {
 		return nil
 	}
-	ticker := time.NewTicker(time.Millisecond * 50)
+	w.Log.Println("Waiting for process...")
+	ticker := time.NewTicker(time.Millisecond * 200)
 	defer ticker.Stop()
 
 	for _ = range ticker.C {
@@ -130,12 +156,11 @@ func (w *WebProcess) waitUntilUp() error {
 		if w.up() {
 			return nil
 		}
-
-		fmt.Print(".")
+		w.Log.Print(".")
 		ticks++
-		if ticks > 70 {
-			fmt.Print("Giving up")
-			return errors.New("Process did not listen after waiting 70*50ms")
+		if ticks > 20 {
+			w.Log.Print("Giving up")
+			return errors.New("Process did not listen after waiting 20*200ms")
 		}
 	}
 	panic("How did we get here? That channel should block forever...")
@@ -143,11 +168,8 @@ func (w *WebProcess) waitUntilUp() error {
 }
 
 func (w *WebProcess) rebuildRequired() bool {
-	uptodate := exec.Command(
-		"bash",
-		"-c",
-		"[ ! -e /tmp/shotgunner ] || find src -newer /tmp/shotgunner | grep -v .",
-	)
-	uptodate.CombinedOutput() // Start and wait for completion
-	return !uptodate.ProcessState.Success()
+	w.Log.Println("Check: " + w.CheckCmd)
+	uptodate := exec.Command("bash", "-c", w.CheckCmd).Run()
+
+	return uptodate != nil
 }
