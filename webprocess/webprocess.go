@@ -168,8 +168,14 @@ func (w *WebProcess) waitUntilUp() error {
 }
 
 func (w *WebProcess) rebuildRequired() bool {
-	w.Log.Println("Check: " + w.CheckCmd)
+
 	uptodate := exec.Command("bash", "-c", w.CheckCmd).Run()
+
+	if uptodate != nil {
+		w.Log.Printf("Check: '%s' -> Rebuild required.\n", w.CheckCmd)
+	} else {
+		w.Log.Printf("Check: '%s' -> Up to date.\n", w.CheckCmd)
+	}
 
 	return uptodate != nil
 }
