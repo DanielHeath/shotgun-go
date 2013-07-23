@@ -58,7 +58,7 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	w.m.Lock()
 	defer w.m.Unlock()
 
-	if w.rebuildRequired() || (w.command == nil) {
+	if w.rebuildRequired() || (!w.running()) {
 		err := w.reload()
 		if err != nil {
 			bytes, _ := ioutil.ReadAll(&w.output)
