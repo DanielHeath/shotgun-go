@@ -39,6 +39,13 @@ func NewWebProcess(checkCmd, buildCmd, runCmd string, targeturl *url.URL, log *l
 	}
 	wp.clearCmd()
 
+	// So that build/run errors will show up at start time.
+	// Also improves first-request responsiveness since the
+	// server starts immediately.
+	err := wp.reload()
+	if err != nil {
+		panic(err)
+	}
 	return wp
 }
 
