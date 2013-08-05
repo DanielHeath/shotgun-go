@@ -43,9 +43,7 @@ func NewWebProcess(checkCmd, buildCmd, runCmd string, targeturl *url.URL, log *l
 	// Also improves first-request responsiveness since the
 	// server starts immediately.
 	err := wp.reload()
-	if err != nil {
-		panic(err)
-	}
+	logger.Println(err)
 	return wp
 }
 
