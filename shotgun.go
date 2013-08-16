@@ -38,7 +38,7 @@ shotgun -u http://localhost:8008 -p 8010 -checkCmd='exit `+"`find -name *.go -ne
 `)
 
 		if rawurl != "" && err != nil {
-			fmt.Fprintf(os.Stderr, "URL must be a valid url:", err)
+			fmt.Fprintf(os.Stderr, "URL must be a valid url: %s", err)
 		}
 		os.Exit(-1)
 	}
