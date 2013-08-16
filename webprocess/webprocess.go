@@ -168,7 +168,6 @@ func (w *WebProcess) waitUntilUp() error {
 			return errors.New("Process did not listen after waiting 20*200ms")
 		}
 	}
-	panic("How did we get here? That channel should block forever...")
 	return nil
 }
 
