@@ -77,7 +77,7 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 func (w *WebProcess) reload() (err error) {
 	w.Log.Println("Reloading...")
-	w.stop()
+	w.Stop()
 	err = w.rebuild()
 	if err != nil {
 		w.Log.Println(err)
@@ -92,7 +92,7 @@ func (w *WebProcess) reload() (err error) {
 	return
 }
 
-func (w *WebProcess) stop() {
+func (w *WebProcess) Stop() {
 	if w.command != nil {
 		if w.command.Process != nil {
 			w.command.Process.Signal(syscall.SIGTERM)
