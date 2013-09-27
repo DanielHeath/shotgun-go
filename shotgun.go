@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 )
 
 var log *logger.Logger
@@ -18,6 +19,8 @@ var log *logger.Logger
 var port int
 var rawurl, checkCmd, buildCmd, runCmd, configFile string
 var proxyUrl *url.URL
+
+var wp *webprocess.WebProcess
 
 type YmlConfig struct {
 	Env      []map[string]string
@@ -91,18 +94,32 @@ shotgun -u http://localhost:8008 -p 8010 -checkCmd='exit `+"`find -name *.go -ne
 	}
 }
 
+func signalHandler(c chan os.Signal) {
+	// Block until a signal is received.
+	<-c
+	wp.Stop()
+	os.Exit(0)
+}
+
 func main() {
 	log.Printf("Starting reverse proxy on http://localhost:%d for %s\n", port, proxyUrl.String())
 	log.Println("Check command: " + checkCmd)
 	log.Println("Build command: " + buildCmd)
 	log.Println("Run command: " + runCmd)
-	wp := webprocess.NewWebProcess(
+
+	wp = webprocess.NewWebProcess(
 		checkCmd,
 		buildCmd,
 		runCmd,
 		proxyUrl,
 		log,
 	)
+
+	// Listen for os signals
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, os.Kill)
+	go signalHandler(c)
+
 	http.HandleFunc("/", wp.ServeHTTP)
 	panic(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
 }
