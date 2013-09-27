@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -39,9 +38,7 @@ func NewWebProcess(checkCmd, buildCmd, runCmd string, targeturl *url.URL, log *l
 	}
 	wp.clearCmd()
 
-	// So that build/run errors will show up at start time.
-	// Also improves first-request responsiveness since the
-	// server starts immediately.
+	// Always trigger a rebuild at start time.
 	err := wp.reload()
 	logger.Println(err)
 	return wp
@@ -77,7 +74,7 @@ func (w *WebProcess) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 func (w *WebProcess) reload() (err error) {
 	w.Log.Println("Reloading...")
-	w.stop()
+	w.Stop()
 	err = w.rebuild()
 	if err != nil {
 		w.Log.Println(err)
@@ -87,17 +84,19 @@ func (w *WebProcess) reload() (err error) {
 	if err != nil {
 		w.Log.Println(err)
 		return
+	} else {
+		w.Log.Println("Started pid", w.command.Process.Pid)
 	}
 	err = w.waitUntilUp()
 	return
 }
 
-func (w *WebProcess) stop() {
+func (w *WebProcess) Stop() {
 	if w.command != nil {
 		if w.command.Process != nil {
-			w.command.Process.Signal(syscall.SIGTERM)
+			w.Log.Println("Stopping pid", w.command.Process.Pid)
+			w.command.Process.Kill()
 		}
-		w.command.Wait()
 		w.clearCmd()
 	}
 }
@@ -128,13 +127,19 @@ func (w *WebProcess) start() error {
 	w.command.Stdout = w.stdout
 	w.command.Stderr = w.stderr
 
-	return w.command.Start()
+	startErr := w.command.Start()
+	if startErr != nil {
+		return startErr
+	}
+	go w.command.Wait()
+
+	return nil
 }
 
 func (w *WebProcess) running() bool {
-	return ((w.command != nil) &&
+	return (w.command != nil) &&
 		(w.command.Process != nil) &&
-		((w.command.ProcessState == nil) || !w.command.ProcessState.Exited()))
+		((w.command.ProcessState == nil) || !w.command.ProcessState.Exited())
 }
 
 func (w *WebProcess) up() bool {
