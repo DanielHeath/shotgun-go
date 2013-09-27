@@ -5,17 +5,32 @@ import (
 	"flag"
 	"fmt"
 	"github.com/DanielHeath/shotgun-go/webprocess"
+	"io/ioutil"
+	"launchpad.net/goyaml"
 	logger "log"
 	"net/http"
 	"net/url"
 	"os"
 )
 
+var log *logger.Logger
+
 var port int
-var rawurl, checkCmd, buildCmd, runCmd string
+var rawurl, checkCmd, buildCmd, runCmd, configFile string
 var proxyUrl *url.URL
 
+type YmlConfig struct {
+	Env      []map[string]string
+	Port     int
+	Url      string
+	CheckCmd string
+	BuildCmd string
+	RunCmd   string
+}
+
 func init() {
+	log = logger.New(os.Stdout, "Shotgun: ", 0)
+
 	flag.IntVar(&port, "p", 8009, "Shorthand for --port")
 	flag.IntVar(&port, "port", 8009, "The port for shotgun to listen on")
 	flag.StringVar(&rawurl, "u", "", "Shorthand for --url")
@@ -23,10 +38,42 @@ func init() {
 	flag.StringVar(&checkCmd, "checkCmd", "", "Command to check if build is required. Command should exit 1 for a rebuild, 0 for no rebuild. (required)")
 	flag.StringVar(&buildCmd, "buildCmd", "", "Command to build the executable (required)")
 	flag.StringVar(&runCmd, "runCmd", "", "Command to run the executable (required)")
+	flag.StringVar(&configFile, "config", "", "Config file")
 	flag.Parse()
+
+	// try loading config file if no parameters have been given
+	if rawurl == "" && checkCmd == "" && buildCmd == "" && runCmd == "" && configFile == "" {
+		configFile = ".shotgun-go"
+	}
+
+	if configFile != "" {
+		configBytes, err := ioutil.ReadFile(configFile)
+		if err == nil {
+			ymlconfig := YmlConfig{}
+			err = goyaml.Unmarshal(configBytes, &ymlconfig)
+			if err != nil {
+				panic(err)
+			}
+			log.Println("Read config " + configFile)
+
+			rawurl = ymlconfig.Url
+			port = ymlconfig.Port
+			checkCmd = ymlconfig.CheckCmd
+			buildCmd = ymlconfig.BuildCmd
+			runCmd = ymlconfig.RunCmd
+
+			for _, envmap := range ymlconfig.Env {
+				for key, value := range envmap {
+					log.Println("Enironment set " + key + ": " + value)
+					os.Setenv(key, value)
+				}
+			}
+		}
+	}
 
 	var err error
 	proxyUrl, err = url.Parse(rawurl)
+
 	if rawurl == "" || checkCmd == "" || buildCmd == "" || runCmd == "" || err != nil || len(flag.Args()) != 0 {
 		fmt.Fprintf(os.Stderr, "Shotgun is a reverse proxy for hot-reloading code.\n")
 		fmt.Fprintf(os.Stderr, `Usage: %s [options] -checkCmd="" -buildCmd="" -runCmd=""`+"\n", os.Args[0])
@@ -45,7 +92,6 @@ shotgun -u http://localhost:8008 -p 8010 -checkCmd='exit `+"`find -name *.go -ne
 }
 
 func main() {
-	log := logger.New(os.Stdout, "Shotgun: ", 0)
 	log.Printf("Starting reverse proxy on http://localhost:%d for %s\n", port, proxyUrl.String())
 	log.Println("Check command: " + checkCmd)
 	log.Println("Build command: " + buildCmd)
